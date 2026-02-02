@@ -44,6 +44,8 @@ svg { width:14px; height:14px; margin:2px; animation:drop 0.2s ease; }
   <button onclick="resetGame()">🔄 リスタート</button>
   <button onclick="setLayout('horizontal')">⬅ 横</button>
   <button onclick="setLayout('vertical')">⬆ 縦</button>
+  <button onclick="setMode('human-vs-cpu')">CPU対戦</button>
+  <button onclick="setMode('human-vs-human')">2人対戦</button>
 </div>
 <div id="status"></div>
 <div id="board" class="board horizontal"></div>
@@ -52,7 +54,7 @@ svg { width:14px; height:14px; margin:2px; animation:drop 0.2s ease; }
 /* =====================
    状態管理
 ===================== */
-let pits, currentPlayer, animating, gameOver;
+let pits, currentPlayer, animating, gameOver, mode="human-vs-cpu";
 const boardEl = document.getElementById("board");
 const statusEl = document.getElementById("status");
 
@@ -101,7 +103,10 @@ function renderVertical(){
 /* ピット・ストア生成 */
 function pit(i){
   const el=document.createElement("div"); el.className="pit"; el.dataset.index=i;
-  if(currentPlayer==="human"&&i<=5&&pits[i]>0&&!animating&&!gameOver){ el.classList.add("clickable"); el.onclick=()=>move(i);}
+  if(!animating && !gameOver){
+    if(mode==="human-vs-human"){ el.classList.add("clickable"); el.onclick=()=>move(i); }
+    else if(mode==="human-vs-cpu" && currentPlayer==="human" && i<=5 && pits[i]>0){ el.classList.add("clickable"); el.onclick=()=>move(i); }
+  }
   el.appendChild(stones(pits[i])); return el;
 }
 function store(i){ const el=document.createElement("div"); el.className="store"; el.dataset.index=i; el.appendChild(stones(pits[i])); return el; }
@@ -130,21 +135,21 @@ async function move(start){
   const fromEl=document.querySelector(`[data-index="${start}"]`);
   while(stonesCount>0){
     await sleep(160); i=(i+1)%14;
-    if(currentPlayer==="human"&&i===13) continue;
-    if(currentPlayer==="cpu"&&i===6) continue;
+    if(currentPlayer==="human" && i===13) continue;
+    if(currentPlayer==="cpu" && i===6) continue;
     const toEl=document.querySelector(`[data-index="${i}"]`);
     flyStone(fromEl,toEl); pits[i]++; render(); stonesCount--;
   }
   handleCapture(i); setNextPlayer(i); animating=false; checkGameEnd(); updateStatus(); render();
-  if(currentPlayer==="cpu" && !gameOver) cpuMove();
+  if(mode==="human-vs-cpu" && currentPlayer==="cpu" && !gameOver) cpuMove();
 }
 
 function handleCapture(last){
-  if(currentPlayer==="human"&&last<=5&&pits[last]===1){ const opp=12-last; if(pits[opp]>0){ pits[6]+=pits[opp]+1; pits[last]=pits[opp]=0; } }
-  if(currentPlayer==="cpu"&&last>=7&&last<=12&&pits[last]===1){ const opp=12-last; if(pits[opp]>0){ pits[13]+=pits[opp]+1; pits[last]=pits[opp]=0; } }
+  if(currentPlayer==="human" && last<=5 && pits[last]===1){ const opp=12-last; if(pits[opp]>0){ pits[6]+=pits[opp]+1; pits[last]=pits[opp]=0; } }
+  if(currentPlayer==="cpu" && last>=7 && last<=12 && pits[last]===1){ const opp=12-last; if(pits[opp]>0){ pits[13]+=pits[opp]+1; pits[last]=pits[opp]=0; } }
 }
 
-function setNextPlayer(last){ if(currentPlayer==="human"&&last===6) return; if(currentPlayer==="cpu"&&last===13) return; currentPlayer=currentPlayer==="human"?"cpu":"human"; }
+function setNextPlayer(last){ if(currentPlayer==="human" && last===6) return; if(currentPlayer==="cpu" && last===13) return; currentPlayer=currentPlayer==="human"?"cpu":"human"; }
 
 /* =====================
    CPU (簡易ミニマックス)
@@ -164,7 +169,7 @@ function minimax(board,depth,player){
 }
 function simulate(board,start,player){
   const b=board.slice(); let stones=b[start]; b[start]=0; let i=start;
-  while(stones--){ i=(i+1)%14; if(player==="human"&&i===13) continue; if(player==="cpu"&&i===6) continue; b[i]++; }
+  while(stones--){ i=(i+1)%14; if(player==="human" && i===13) continue; if(player==="cpu" && i===6) continue; b[i]++; }
   if(player==="cpu" && i>=7 && i<=12 && b[i]===1){ const opp=12-i; b[13]+=b[opp]+1; b[i]=b[opp]=0; }
   const next=(player==="cpu" && i===13)||(player==="human" && i===6)?player:(player==="cpu"?"human":"cpu");
   return {board:b,next};
@@ -182,11 +187,12 @@ function checkGameEnd(){
   for(let i=0;i<6;i++) pits[i]=0;
   for(let i=7;i<13;i++) pits[i]=0;
   gameOver=true;
-  statusEl.textContent=pits[6]>pits[13]?"🎉 あなたの勝ち！":pits[6]<pits[13]?"😈 CPUの勝ち":"🤝 引き分け";
+  statusEl.textContent=pits[6]>pits[13]?"🎉 プレイヤー1の勝ち！":pits[6]<pits[13]?"😈 プレイヤー2の勝ち":"🤝 引き分け";
 }
 
-function updateStatus(){ if(!gameOver) statusEl.textContent=currentPlayer==="human"?"あなたの番":"CPUの番…"; }
+function updateStatus(){ if(!gameOver) statusEl.textContent=currentPlayer==="human"?"プレイヤー1の番":mode==="human-vs-human"?"プレイヤー2の番":"CPUの番…"; }
 function setLayout(type){ boardEl.classList.remove("horizontal","vertical"); boardEl.classList.add(type); render(); }
+function setMode(m){ mode=m; resetGame(); }
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 
 /* =====================
