@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>マンカラ</title>
+
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2196F3">
+
+<style>
+body { font-family: system-ui,sans-serif; background:#f2f2f2; text-align:center; margin:0; padding:8px; }
+h1 { margin:8px; }
+#controls { margin:8px; }
+button { padding:6px 12px; margin:2px; font-size:14px; cursor:pointer; }
+#status { margin:6px; font-size:1.1em; }
+
+/* ===== Board 共通 ===== */
+.board { margin:16px auto; }
+.pit, .store { width:80px; height:80px; background:#fff; border:2px solid #333; border-radius:8px; box-sizing:border-box; position:relative; }
+.clickable { background:#e8f4ff; cursor:pointer; }
+.stones { display:flex; flex-wrap:wrap; justify-content:center; padding:6px; }
+svg { width:14px; height:14px; margin:2px; animation:drop 0.2s ease; }
+@keyframes drop { from {transform:translateY(-6px);opacity:0;} to {transform:translateY(0);opacity:1;} }
+.flying-stone { position:fixed;width:14px;height:14px;pointer-events:none;transition:transform 0.35s ease; z-index:1000; }
+
+/* 横表示 */
+.board.horizontal { display:grid; grid-template-columns:80px repeat(6,80px) 80px; gap:8px; justify-content:center; }
+
+/* 縦表示（flexbox） */
+.board.vertical { display:block; width:fit-content; }
+.row { display:flex; justify-content:center; gap:8px; margin-bottom:8px; }
+.row.middle { justify-content:space-between; width:100%; max-width:720px; margin-bottom:16px; }
+.spacer { flex-grow:1; }
+
+/* スマホ対応縮小 */
+@media (max-width:480px) { .board { transform:scale(0.9); } }
+</style>
+</head>
+<body>
+
+<h1>マンカラ（PWA版）</h1>
+<div id="controls">
+  <button onclick="resetGame()">🔄 リスタート</button>
+  <button onclick="setLayout('horizontal')">⬅ 横</button>
+  <button onclick="setLayout('vertical')">⬆ 縦</button>
+</div>
+<div id="status"></div>
+<div id="board" class="board horizontal"></div>
+
+<script>
+/* =====================
+   状態管理
+===================== */
+let pits, currentPlayer, animating, gameOver;
+const boardEl = document.getElementById("board");
+const statusEl = document.getElementById("status");
+
+/* =====================
+   初期化
+===================== */
+function resetGame() {
+  pits = Array(14).fill(4); pits[6]=pits[13]=0;
+  currentPlayer="human"; animating=false; gameOver=false;
+  updateStatus(); render();
+}
+resetGame();
+
+/* =====================
+   描画
+===================== */
+function render() {
+  boardEl.innerHTML="";
+  if(boardEl.classList.contains("horizontal")) renderHorizontal();
+  else renderVertical();
+}
+
+/* 横表示 */
+function renderHorizontal(){
+  boardEl.appendChild(store(13));
+  for(let i=12;i>=7;i--) boardEl.appendChild(pit(i));
+  boardEl.appendChild(store(6));
+  const spacer1=document.createElement("div"); spacer1.style.width="80px"; boardEl.appendChild(spacer1);
+  for(let i=0;i<=5;i++) boardEl.appendChild(pit(i));
+  const spacer2=document.createElement("div"); spacer2.style.width="80px"; boardEl.appendChild(spacer2);
+}
+
+/* 縦表示 */
+function renderVertical(){
+  boardEl.classList.remove("horizontal"); boardEl.classList.add("vertical");
+  const topRow=document.createElement("div"); topRow.className="row top";
+  for(let i=12;i>=7;i--) topRow.appendChild(pit(i));
+  const middleRow=document.createElement("div"); middleRow.className="row middle";
+  const cpuStore=store(13), humanStore=store(6), spacer=document.createElement("div"); spacer.className="spacer";
+  middleRow.appendChild(cpuStore); middleRow.appendChild(spacer); middleRow.appendChild(humanStore);
+  const bottomRow=document.createElement("div"); bottomRow.className="row bottom";
+  for(let i=0;i<=5;i++) bottomRow.appendChild(pit(i));
+  boardEl.appendChild(topRow); boardEl.appendChild(middleRow); boardEl.appendChild(bottomRow);
+}
+
+/* ピット・ストア生成 */
+function pit(i){
+  const el=document.createElement("div"); el.className="pit"; el.dataset.index=i;
+  if(currentPlayer==="human"&&i<=5&&pits[i]>0&&!animating&&!gameOver){ el.classList.add("clickable"); el.onclick=()=>move(i);}
+  el.appendChild(stones(pits[i])); return el;
+}
+function store(i){ const el=document.createElement("div"); el.className="store"; el.dataset.index=i; el.appendChild(stones(pits[i])); return el; }
+function stones(n){ const wrap=document.createElement("div"); wrap.className="stones"; for(let i=0;i<n;i++) wrap.innerHTML+=`<svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="#555"/></svg>`; return wrap; }
+
+/* =====================
+   石アニメ
+===================== */
+function centerOf(el){ const r=el.getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+r.height/2}; }
+function flyStone(fromEl,toEl){
+  const stone=document.createElementNS("http://www.w3.org/2000/svg","svg");
+  stone.setAttribute("viewBox","0 0 10 10"); stone.innerHTML=`<circle cx="5" cy="5" r="4" fill="#555"/>`;
+  stone.classList.add("flying-stone"); document.body.appendChild(stone);
+  const from=centerOf(fromEl), to=centerOf(toEl);
+  stone.style.left=from.x+"px"; stone.style.top=from.y+"px";
+  requestAnimationFrame(()=>{ stone.style.transform=`translate(${to.x-from.x}px,${to.y-from.y}px)`; });
+  setTimeout(()=>stone.remove(),400);
+}
+
+/* =====================
+   ゲーム進行
+===================== */
+async function move(start){
+  if(animating||gameOver) return; animating=true;
+  let stonesCount=pits[start]; pits[start]=0; let i=start;
+  const fromEl=document.querySelector(`[data-index="${start}"]`);
+  while(stonesCount>0){
+    await sleep(160); i=(i+1)%14;
+    if(currentPlayer==="human"&&i===13) continue;
+    if(currentPlayer==="cpu"&&i===6) continue;
+    const toEl=document.querySelector(`[data-index="${i}"]`);
+    flyStone(fromEl,toEl); pits[i]++; render(); stonesCount--;
+  }
+  handleCapture(i); setNextPlayer(i); animating=false; checkGameEnd(); updateStatus(); render();
+  if(currentPlayer==="cpu" && !gameOver) cpuMove();
+}
+
+function handleCapture(last){
+  if(currentPlayer==="human"&&last<=5&&pits[last]===1){ const opp=12-last; if(pits[opp]>0){ pits[6]+=pits[opp]+1; pits[last]=pits[opp]=0; } }
+  if(currentPlayer==="cpu"&&last>=7&&last<=12&&pits[last]===1){ const opp=12-last; if(pits[opp]>0){ pits[13]+=pits[opp]+1; pits[last]=pits[opp]=0; } }
+}
+
+function setNextPlayer(last){ if(currentPlayer==="human"&&last===6) return; if(currentPlayer==="cpu"&&last===13) return; currentPlayer=currentPlayer==="human"?"cpu":"human"; }
+
+/* =====================
+   CPU (簡易ミニマックス)
+===================== */
+function cpuMove(){ setTimeout(()=>{ const best=minimaxRoot(pits,2); if(best!==null) move(best); },500); }
+function minimaxRoot(board,depth){
+  let bestScore=-Infinity,bestMove=null;
+  for(let i=7;i<=12;i++){ if(board[i]===0) continue; const sim=simulate(board,i,"cpu"); const score=minimax(sim.board,depth-1,sim.next); if(score>bestScore){ bestScore=score; bestMove=i; } }
+  return bestMove;
+}
+function minimax(board,depth,player){
+  if(depth===0) return board[13]-board[6];
+  let best=player==="cpu"?-Infinity:Infinity;
+  const range=player==="cpu"?[7,12]:[0,5];
+  for(let i=range[0];i<=range[1];i++){ if(board[i]===0) continue; const sim=simulate(board,i,player); best=player==="cpu"?Math.max(best,sim.board[13]-sim.board[6]):Math.min(best,sim.board[13]-sim.board[6]); }
+  return best;
+}
+function simulate(board,start,player){
+  const b=board.slice(); let stones=b[start]; b[start]=0; let i=start;
+  while(stones--){ i=(i+1)%14; if(player==="human"&&i===13) continue; if(player==="cpu"&&i===6) continue; b[i]++; }
+  if(player==="cpu" && i>=7 && i<=12 && b[i]===1){ const opp=12-i; b[13]+=b[opp]+1; b[i]=b[opp]=0; }
+  const next=(player==="cpu" && i===13)||(player==="human" && i===6)?player:(player==="cpu"?"human":"cpu");
+  return {board:b,next};
+}
+
+/* =====================
+   終了判定
+===================== */
+function checkGameEnd(){
+  const hEmpty=pits.slice(0,6).every(v=>v===0);
+  const cEmpty=pits.slice(7,13).every(v=>v===0);
+  if(!hEmpty && !cEmpty) return;
+  for(let i=0;i<6;i++) pits[6]+=pits[i];
+  for(let i=7;i<13;i++) pits[13]+=pits[i];
+  for(let i=0;i<6;i++) pits[i]=0;
+  for(let i=7;i<13;i++) pits[i]=0;
+  gameOver=true;
+  statusEl.textContent=pits[6]>pits[13]?"🎉 あなたの勝ち！":pits[6]<pits[13]?"😈 CPUの勝ち":"🤝 引き分け";
+}
+
+function updateStatus(){ if(!gameOver) statusEl.textContent=currentPlayer==="human"?"あなたの番":"CPUの番…"; }
+function setLayout(type){ boardEl.classList.remove("horizontal","vertical"); boardEl.classList.add(type); render(); }
+function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+
+/* =====================
+   Service Worker 登録
+===================== */
+if("serviceWorker" in navigator){
+  navigator.serviceWorker.register("sw.js")
+    .then(()=>console.log("Service Worker registered"))
+    .catch(err=>console.error("SW登録失敗:",err));
+}
+</script>
+</body>
+</html>
